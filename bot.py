@@ -1,26 +1,28 @@
 # bot.py
 import os
+import random
 
 import discord
 
-# bot's stuff
-
 TOKEN = os.getenv('DISCORD_TOKEN')
-id = os.getenv('DISCORD_ID')
+
 client = discord.Client()
-GUILD = client.get_guild(id)
+
 
 @client.event
 async def on_ready():
-    for guild in client.guilds:
-        if guild.name == GUILD:
-            break
+    print(f'{client.user.name} has connected to Discord!')
 
-    print(
-        f'{client.user} is connected to the following guild:\n'
-        f'{guild.name}(id: {guild.id})'
-    )
-    members = '\n - '.join([member.name for member in guild.members])
-    print(f'Guild Members:\n - {members}')
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+    if message.content == 'roll a dice;':
+        response = random.choice(range(1, 7))
+        await message.channel.send(response)
+    if 'addEmoji;' in message.content:
+        await message.add_reaction('\N{THUMBS UP SIGN}')
+        await message.add_reaction('\N{THUMBS DOWN SIGN}')
+
 
 client.run(TOKEN)

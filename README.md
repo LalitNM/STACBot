@@ -7,4 +7,3 @@
 4. activate venv using `source venv/bin/activate`. You are now in your virtual environment.
 5. Install requirements using `pip3 -r requierments.txt`.
 6. Export your token as a environment variable using `export DISCORD_TOKEN=<Your token goes here>`
-6. Export your ID as a environment variable using `export DISCORD_ID=<Your id goes here>`
