@@ -1,6 +1,6 @@
 # bot.py
 import os
-import random
+import re
 import traceback
 import datetime
 import  asyncio
@@ -68,11 +68,12 @@ async def on_message(message):
     except:
         print('There are no attachments in message.')
     try:
-        if 'http' in message.content:
+        if re.search(r"https?:\/\/[-a-z0-9@:%._+~#=]{1,256}\.[a-z0-9()]{1,6}\b([-a-z0-9()@:%_+.~#?&/=]*)",
+            message.content, re.IGNORECASE) :
             await react(fourEmojis, message)
             return
     except:
-        print('\'http\' not in message.')
+        print('URL not found in message.\n', traceback.format_exc())
 
 
     if checkMention(message):
@@ -94,7 +95,7 @@ async def on_message(message):
             '''.format(STACBot=client.user.name))
             return
     except:
-        print('This was not help command.')
+        print('This was not help command.\n', traceback.format_exc())
     try:
         if 'react' in content:
             if len(content) == 2:
@@ -104,11 +105,11 @@ async def on_message(message):
             elif len(content) == 3:
                 if (content[-1][-2:] == 'th') or (content[-1][-2:] == 'st') or (content[-1][-2:] == 'nd') or (content[-1][-2:] == 'rd'):
                     index = int(content[-1][:-2])
-                    history = await message.channel.history(limit=index + 1).flatten()
-                    await react(fourEmojis, history[-1])
-                    await message.delete()
-
-                await react([content[-1]], message)
+                else :
+                    index = int(content[-1])
+                history = await message.channel.history(limit=index + 1).flatten()
+                await react(fourEmojis, history[-1])
+                await message.delete()
             return
     except:
         print("\'react\' is not in message.\n", traceback.format_exc())
@@ -116,6 +117,9 @@ async def on_message(message):
 
     try:
         if content[1] == 'poll':
+            if not (len(content)>=3 and content[-1].isdigit()):
+                await message.channel.send("Please specify number of messages to react to", reference=message)
+                return
             limit = int(content[-1])
             messages = await message.channel.history(limit=limit + 1).flatten()
             print("Executing Poll command")
