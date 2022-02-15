@@ -1,9 +1,9 @@
 # bot.py
 import os
 import re
-import traceback
 import datetime
-import  asyncio
+import asyncio
+import logging
 from dotenv import load_dotenv
 
 import astroevents
@@ -12,6 +12,10 @@ import discord
 
 
 load_dotenv()
+logging.basicConfig(format='%(module)s %(levelname)s [%(asctime)s] %(message)s', 
+                    datefmt='%m/%d/%Y %I:%M:%S %p',
+                    level=logging.INFO)
+
 TOKEN = os.getenv('DISCORD_TOKEN')
 BOT_ID = os.getenv('BOT_ID')
 
@@ -28,7 +32,7 @@ fourEmojis = ['🤩', '🔥', '👍', '💯']
 
 @client.event
 async def on_ready():
-    print(f'{client.user.name} has connected to Discord!')
+    logging.info(f'{client.user.name} has connected to Discord!')
 
 def checkMention(message):
     '''Checks if the bot was mentioned, returns true or false accordingly.'''
@@ -44,11 +48,11 @@ async def react(emojiList, message):
     output: replies to the message having index = messageIndex.
     '''
     global client, selectedEmojis, customEmojis, fourEmojis
-    print('emojiList =', emojiList)
-    print('message =', message)
+    logging.debug(f'emojiList = {emojiList}')
+    logging.debug(f'message = {message}')
     for emoji in emojiList:
         await message.add_reaction(emoji)
-    print('React emoji function finished')
+    logging.info('React emoji function finished')
 
 
 @client.event
@@ -56,33 +60,34 @@ async def on_message(message):
     global prefix
     if message.author == client.user:
         return
-    print('Message Recieved\n\n', message, '\n\n')
+    logging.info(f"Received message {message.id} in channel '{message.channel.name}'" +\
+                 f" from {message.author.name}#{message.author.discriminator}")
     content = message.content.split()
-    print('Message content\n\n', content, '\n\n')
-
-    print('Attachments: ', message.attachments)
+    logging.debug(f'Message content: {content}')
+    logging.debug(f'Attachments: {message.attachments}')
     try:
         if message.attachments:
             await react(fourEmojis, message)
             return
     except:
-        print('There are no attachments in message.')
+        logging.debug('There are no attachments in message.')
     try:
         if re.search(r"https?:\/\/[-a-z0-9@:%._+~#=]{1,256}\.[a-z0-9()]{1,6}\b([-a-z0-9()@:%_+.~#?&/=]*)",
             message.content, re.IGNORECASE) :
             await react(fourEmojis, message)
             return
     except:
-        print('URL not found in message.\n', traceback.format_exc())
+        logging.error('URL not found in message.', exc_info=True)
 
 
     if checkMention(message):
-        print('Bot was mentioned, working on the task.')
+        logging.info('Bot was mentioned, working on the task.')
     else:
         return
 
     try:
         if message.content.split()[1] == 'help':
+            logging.info("sending help message")
             await message.channel.send('''
             Following Commands are allowed:
             1. `@{STACBot} help`: replies with this help message.
@@ -92,10 +97,10 @@ async def on_message(message):
             5. `@{STACBot} (picture|photo)` : Display an astronomy-related photo of the day.
             This bot automatically reacts with '🤩', '🔥', '👍', '💯' to attached images and if there is a link in a message.
             It also posts the upcoming events on the first day of each month in the dedicated channel.
-            '''.format(STACBot=client.user.name))
+            '''.format(STACBot=message.guild.me.display_name))
             return
     except:
-        print('This was not help command.\n', traceback.format_exc())
+        logging.error('This was not help command.', exc_info=True)
     try:
         if 'react' in content:
             if len(content) == 2:
@@ -112,8 +117,8 @@ async def on_message(message):
                 await message.delete()
             return
     except:
-        print("\'react\' is not in message.\n", traceback.format_exc())
-    print(message.content)
+        logging.error("\'react\' is not in message.", exc_info=True)
+    logging.debug(message.content)
 
     try:
         if content[1] == 'poll':
@@ -122,17 +127,17 @@ async def on_message(message):
                 return
             limit = int(content[-1])
             messages = await message.channel.history(limit=limit + 1).flatten()
-            print("Executing Poll command")
+            logging.info("Executing Poll command")
             for msg in messages[1:]:
                 await react(['👍', '👎'], msg)
             await message.delete()
             return
     except:
-        print("This was not a poll command.\n", traceback.format_exc())
+        logging.error("This was not a poll command.", exc_info=True)
 
     try :
         if content[1] == 'events':
-            print("Executing events command")
+            logging.info("Executing events command")
             dt = None
             if len(content) >= 3 and content[2].isdigit() :
                 try :
@@ -148,15 +153,15 @@ async def on_message(message):
             imgdata, embdata = await astroevents.fetch_and_parse(dt, 
                 len(content)==4 and content[2:]==['with','photo'])
             embed = discord.Embed.from_dict(embdata)
-            print("Embed length", len(embed))
+            logging.info(f"Embed length {len(embed)}")
             await message.channel.send(embed=embed)
             return
     except:
-        print("Events command failed\n", traceback.format_exc())
+        logging.error("Events command failed", exc_info=True)
     
     try :
         if content[1]=='picture' or content[1]=='photo' :
-            print("Executing image of the day command")
+            logging.info("Executing image of the day command")
             imgdata = await astroevents.picoftheday()
             url = imgdata.get('url_hd') or imgdata.get('url_regular', '')
             embed = discord.Embed.from_dict({
@@ -171,36 +176,38 @@ async def on_message(message):
             await message.channel.send(embed=embed)
             return
     except :
-        print("Image command failed\n", traceback.format_exc())
+        logging.error("Image command failed", exc_info=True)
 
     # Bot was mentioned directly but none of the above commands matched
     try :
-        await message.channel.send(f"Use `@{client.user.name} help` to see what I can do !", reference=message) # send as reply
+        await message.channel.send("Use `@{STACbot} help` to see what I can do !".format(
+            STACbot=message.guild.me.display_name), reference=message) # send as reply
     except :
-        print(traceback.format_exc())
+        logging.error('', exc_info=True)
 
 
 
 async def loop_monthly():
     await client.wait_until_ready()
     channel = client.get_channel(id=int(os.getenv("EVENT_CHANNEL_ID")))
-    print("Beginning astro eventloop",str(datetime.datetime.now()))
+    logging.info(f"Beginning astro eventloop")
     while not client.is_closed():
         # First day of the month
         dt = datetime.datetime.now()
         if dt.date == 1 :
-            print("Event fetch fired",str(datetime.datetime.now()))
+            logging.info("Event fetch fired")
             try :
                 imgdata, embdata = await astroevents.fetch_and_parse()
-                print(imgdata, embdata, sep='\n\n', end='\n\n')
+                logging.debug(imgdata)
+                logging.debug(embdata)
                 embed = discord.Embed.from_dict(embdata)
-                print("Embed length", len(embed))
+                logging.info(f"Embed length {len(embed)}")
                 await channel.send(embed=embed)
             except :
-                print("ERROR\n", traceback.format_exc())
+                logging.error("ERROR\n", exc_info=True)
         # Repeat every day
         await asyncio.sleep(60 * 60 * 24)
-        print("Astro eventloop iteration",str(datetime.datetime.now()))
+        logging.info("Astro eventloop iteration")
 
 
 client.loop.create_task(loop_monthly())

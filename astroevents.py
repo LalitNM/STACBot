@@ -5,9 +5,9 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify
 from dotenv import load_dotenv
 import datetime
-import traceback
 import functools
 import itertools
+import logging
 import re
 import os
 import sys
@@ -40,23 +40,28 @@ def convertz(match,yy=None,mm=None,d=None,sub=True):
 async def picoftheday():
     global IOTD_URL1, IOTD_URL2
 
-    # Add a picture of the day from astrobin.com
-    print("Beginning IOTD api request 1")
-    async with aiohttp.ClientSession() as session:
-        async with session.get(IOTD_URL1.format(key=os.getenv('PHOTO_API_KEY'), 
-                                                secret=os.getenv('PHOTO_API_SECRET'))) as resp1:
-            resp1.raise_for_status() # Ensure valid HTTP response
-            iotd_info = await resp1.json()
+    try :
+        # Add a picture of the day from astrobin.com
+        logging.info("Beginning IOTD api request 1")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(IOTD_URL1.format(key=os.getenv('PHOTO_API_KEY'), 
+                                                    secret=os.getenv('PHOTO_API_SECRET'))) as resp1:
+                resp1.raise_for_status() # Ensure valid HTTP response
+                iotd_info = await resp1.json()
 
-    print("Beginning IOTD api request 2")
-    async with aiohttp.ClientSession() as session:
-        async with session.get(IOTD_URL2.format(path=iotd_info['objects'][0]['image'], 
-                                                key=os.getenv('PHOTO_API_KEY'), 
-                                                secret=os.getenv('PHOTO_API_SECRET'))) as resp2 :
-            resp2.raise_for_status()
-            iotd_imagedetails = await resp2.json()
-
-    return iotd_imagedetails
+        logging.info("Beginning IOTD api request 2")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(IOTD_URL2.format(path=iotd_info['objects'][0]['image'], 
+                                                    key=os.getenv('PHOTO_API_KEY'), 
+                                                    secret=os.getenv('PHOTO_API_SECRET'))) as resp2 :
+                resp2.raise_for_status()
+                iotd_imagedetails = await resp2.json()
+    except :
+        logging.error('IOTD request error', exc_info=True)
+        return {}
+    else :
+        logging.info('IOTD request success')
+        return iotd_imagedetails
 
 
 
@@ -66,49 +71,58 @@ async def fetch_and_parse(dt=None, with_photo=True):
     DTNOW = dt or datetime.date.today()
     YEAR, MONTH = DTNOW.year, DTNOW.month
 
-    # Get this month's events from skymaps.com
-    print("Getting", CALENDAR_URL.format(yy=YEAR%100, mm=MONTH))
-    async with aiohttp.ClientSession() as session:
-        async with session.get(CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)) as response :
-            response.raise_for_status()
-            web_result = await response.text()
-            web_location = str(response.url)
-    print(f"Received {CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)}!")
+    try :
+        # Get this month's events from skymaps.com
+        logging.info(f"Getting {CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)) as response :
+                response.raise_for_status()
+                web_result = await response.text()
+                web_location = str(response.url)
+    except :
+        logging.error('Skymaps request error', exc_info=True)
+    else :
+        logging.info(f"Received {CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)}!")
 
 
     # Extract useful HTML, parse into markdown, convert timezones to custom value
     bs = BeautifulSoup(web_result, features="html.parser")
     events = {}
-    for tr in bs.select("table table")[0]("tr"):
-        if len(tr('td')) != 2:
-            continue
-        try :
-            DATE = int(next(tr.td.font.stripped_strings))
-        except (ValueError, StopIteration):
-            continue
-        desc = ''.join(map(str, tr("td")[1].font.contents)).strip()
-        neat = re.sub(r'\n+\s*\n*', '\n', markdownify(desc)).strip()
+    try :
+        for tr in bs.select("table table")[0]("tr"):
+            if len(tr('td')) != 2:
+                continue
+            try :
+                DATE = int(next(tr.td.font.stripped_strings))
+            except (ValueError, StopIteration):
+                continue
+            desc = ''.join(map(str, tr("td")[1].font.contents)).strip()
+            neat = re.sub(r'\n+\s*\n*', '\n', markdownify(desc)).strip()
 
-        r1 = re.compile(r'\b([012]?[0-9])\:([0-5][0-9])\b')
-        r2 = re.compile(r'\b([012]?[0-9])h\b')
-        months, dates = [], []
-        # Does changing timezone shift the event into a diff date or month entirely ?
-        for match in itertools.chain(re.finditer(r1, neat), re.finditer(r2, neat)):
-            mo, dat = convertz(match, YEAR, MONTH, DATE, False)
-            dates.append(dat); months.append(mo)
-        if not any([m==MONTH for m in months]) : # Keep the event, but include month name with date
-            DATE = datetime.date(YEAR, months[0], dates[0]).strftime('%b %d')
-        elif not any([d==DATE for d in dates]) : # Shifted into neighbouring day
-            DATE = dates[0]
-        # Important to substitute r1 first, then r2
-        neat = re.sub(r1, functools.partial(convertz, yy=YEAR,mm=MONTH,d=DATE,sub=True), neat)
-        neat = re.sub(r2, functools.partial(convertz, yy=YEAR,mm=MONTH,d=DATE,sub=True), neat)
-        neat = re.sub(r'\bUT\b', 'IST', neat)
+            r1 = re.compile(r'\b([012]?[0-9])\:([0-5][0-9])\b')
+            r2 = re.compile(r'\b([012]?[0-9])h\b')
+            months, dates = [], []
+            # Does changing timezone shift the event into a diff date or month entirely ?
+            for match in itertools.chain(re.finditer(r1, neat), re.finditer(r2, neat)):
+                mo, dat = convertz(match, YEAR, MONTH, DATE, False)
+                dates.append(dat); months.append(mo)
+            if not any([m==MONTH for m in months]) : # Keep the event, but include month name with date
+                DATE = datetime.date(YEAR, months[0], dates[0]).strftime('%b %d')
+            elif not any([d==DATE for d in dates]) : # Shifted into neighbouring day
+                DATE = dates[0]
+            # Important to substitute r1 first, then r2
+            neat = re.sub(r1, functools.partial(convertz, yy=YEAR,mm=MONTH,d=DATE,sub=True), neat)
+            neat = re.sub(r2, functools.partial(convertz, yy=YEAR,mm=MONTH,d=DATE,sub=True), neat)
+            neat = re.sub(r'\bUT\b', 'IST', neat)
 
-        if DATE not in events :
-            events[DATE] = []
-        events[DATE].append(neat)
-    print(f"Parsed {len(events)} event fields")
+            if DATE not in events :
+                events[DATE] = []
+            events[DATE].append(neat)
+    except :
+        logging.error('HTML parsing error', exc_info=True)
+        logging.debug(bs)
+    else :
+        logging.info(f"Parsed {len(events)} event fields")
 
 
     # Discord Webhook API format
@@ -134,22 +148,16 @@ async def fetch_and_parse(dt=None, with_photo=True):
         try :
             imgdata = await picoftheday()
             embed["image"] = {
-                "url" : imgdata['url_regular'],
-                "height": imgdata['h'],
-                "width": imgdata['w']
+                "url" : imgdata.get('url_regular',''),
+                "height": imgdata.get('h',''),
+                "width": imgdata.get('w','')
             }
-            embed["footer"]["text"] += "\nPicture of the Day from astrobin.com by "+imgdata['user']
+            embed["footer"]["text"] += "\nPicture of the Day from astrobin.com by "+imgdata.get('user','')
         except :
             imgdata = {}
-            print("ERROR\n", traceback.format_exc())
+            logging.error("ERROR", exc_info=True)
     else :
         imgdata = {}
 
     return (imgdata, embed)
 
-
-
-
-# if __name__ == '__main__':
-#     # d = main()
-#     print("Data", *d, sep='\n\n')
