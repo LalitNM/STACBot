@@ -110,7 +110,7 @@ async def on_message(message):
             2. `@{STACBot} react [n:int,1+]`: Reacts to <n>th message in history with '🤩', '🔥', '👍', '💯'. Default value of n is 1.
             3. `@{STACBot} poll <n:int,1+>`: starts a poll by reacting to n last messages with '👍' and '👎'.
             4. `@{STACBot} events [month:1..12] [year:2002+]`: Get a list of astronomical events happening this month, or in the past
-            5. `@{STACBot} (picture|photo)` : Display an astronomy-related photo of the day.
+            5. `@{STACBot} (picture|photo) [k:int,0+]` : Display an astronomy-related photo of the day.
             This bot automatically reacts with '🤩', '🔥', '👍', '💯' to attached images and if there is a link in a message.
             It also posts the upcoming events on the first day of each month in the dedicated channel.
             '''.format(STACBot=message.guild.me.display_name))
@@ -177,11 +177,16 @@ async def on_message(message):
     try :
         if len(content)>1 and (content[1]=='picture' or content[1]=='photo') :
             logging.info("Executing image of the day command")
-            imgdata = await astroevents.picoftheday()
+            if len(content)>2 and content[2].isdigit() and int(content[2])>=0:
+                offset = int(content[2])
+                offstr = (datetime.date.today()-datetime.timedelta(days=offset)).strftime(' for %d/%m/%Y')
+            else :
+                offset, offstr = 0, ""
+            imgdata = await astroevents.picoftheday(offset)
             url = imgdata.get('url_hd') or imgdata.get('url_regular', '')
             embed = discord.Embed.from_dict({
                 'title':imgdata.get('title','Unknown'),
-                'description':"Image of the Day",
+                'description':"Image of the Day" + offstr,
                 'url':url,
                 'image': {'url':url, 'height':imgdata.get('h'), 'width':imgdata.get('w')},
                 'footer': {'text':"astrobin.com/{hash}, taken by {author}".format(
