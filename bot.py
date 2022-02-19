@@ -4,7 +4,9 @@ import re
 import datetime
 import asyncio
 import logging
+import logging.handlers
 from dotenv import load_dotenv
+import signal
 
 import astroevents
 
@@ -12,14 +14,28 @@ import discord
 
 
 load_dotenv()
-logging.basicConfig(format='%(module)s %(levelname)s [%(asctime)s] %(message)s', 
+filelog = logging.handlers.RotatingFileHandler('/var/log/bot/debug.log', 
+                                                maxBytes=1024*1024, backupCount=9)
+filelog.setLevel(logging.DEBUG)
+stdlog = logging.StreamHandler()
+stdlog.setLevel(logging.INFO)
+logging.basicConfig(format='%(module)-12s %(levelname)-8s [%(asctime)s] %(message)s', 
                     datefmt='%m/%d/%Y %I:%M:%S %p',
-                    level=logging.INFO)
+                    handlers=[filelog, stdlog],
+                    level=logging.DEBUG)
+
+basepath = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(basepath,'.PID'), 'w') as _pidrecord:
+    _pidrecord.write(str(os.getpid()))
+logging.warning(f"Info : Started with PID {os.getpid()}")
+
 
 TOKEN = os.getenv('DISCORD_TOKEN')
 BOT_ID = os.getenv('BOT_ID')
 
+# client = discord.Client(connector=aiohttp.TCPConnector(local_addr=('0.0.0.0',5545)))
 client = discord.Client()
+
 
 customEmojis = ['asteroid:788060704011845662', 'earth:788060705764540426', 
                 'jupiter:788060702291656725', 'mars:788060701284499517', 
@@ -86,7 +102,7 @@ async def on_message(message):
         return
 
     try:
-        if message.content.split()[1] == 'help':
+        if len(content)>1 and message.content.split()[1] == 'help':
             logging.info("sending help message")
             await message.channel.send('''
             Following Commands are allowed:
@@ -118,10 +134,9 @@ async def on_message(message):
             return
     except:
         logging.error("\'react\' is not in message.", exc_info=True)
-    logging.debug(message.content)
 
     try:
-        if content[1] == 'poll':
+        if len(content)>1 and content[1] == 'poll':
             if not (len(content)>=3 and content[-1].isdigit()):
                 await message.channel.send("Please specify number of messages to react to", reference=message)
                 return
@@ -136,7 +151,7 @@ async def on_message(message):
         logging.error("This was not a poll command.", exc_info=True)
 
     try :
-        if content[1] == 'events':
+        if len(content)>1 and content[1] == 'events':
             logging.info("Executing events command")
             dt = None
             if len(content) >= 3 and content[2].isdigit() :
@@ -151,7 +166,7 @@ async def on_message(message):
                     await message.channel.send("Invalid date", reference=message)
                     return
             imgdata, embdata = await astroevents.fetch_and_parse(dt, 
-                len(content)==4 and content[2:]==['with','photo'])
+                (len(content)==5 and content[-1]=='withphoto'))
             embed = discord.Embed.from_dict(embdata)
             logging.info(f"Embed length {len(embed)}")
             await message.channel.send(embed=embed)
@@ -160,7 +175,7 @@ async def on_message(message):
         logging.error("Events command failed", exc_info=True)
     
     try :
-        if content[1]=='picture' or content[1]=='photo' :
+        if len(content)>1 and (content[1]=='picture' or content[1]=='photo') :
             logging.info("Executing image of the day command")
             imgdata = await astroevents.picoftheday()
             url = imgdata.get('url_hd') or imgdata.get('url_regular', '')
@@ -191,24 +206,26 @@ async def loop_monthly():
     await client.wait_until_ready()
     channel = client.get_channel(id=int(os.getenv("EVENT_CHANNEL_ID")))
     logging.info(f"Beginning astro eventloop")
-    while not client.is_closed():
-        # First day of the month
-        dt = datetime.datetime.now()
-        if dt.date == 1 :
-            logging.info("Event fetch fired")
-            try :
-                imgdata, embdata = await astroevents.fetch_and_parse()
-                logging.debug(imgdata)
-                logging.debug(embdata)
-                embed = discord.Embed.from_dict(embdata)
-                logging.info(f"Embed length {len(embed)}")
-                await channel.send(embed=embed)
-            except :
-                logging.error("ERROR\n", exc_info=True)
-        # Repeat every day
-        await asyncio.sleep(60 * 60 * 24)
-        logging.info("Astro eventloop iteration")
+    if not client.is_closed():
+        try :
+            imgdata, embdata = await astroevents.fetch_and_parse()
+            logging.debug(imgdata)
+            logging.debug(embdata)
+            embed = discord.Embed.from_dict(embdata)
+            logging.info(f"Embed length {len(embed)}")
+            await channel.send(embed=embed)
+        except :
+            logging.error("Astro event error\n", exc_info=True)
+        logging.info("Astro eventloop done")
+    else :
+        logging.warning("Discord client was closed during astroevent call")
 
 
-client.loop.create_task(loop_monthly())
+def loopevent_trigger(*args):
+    global client
+    logging.info(f"Received signal {args}")
+    client.loop.create_task(loop_monthly())
+
+signal.signal(signal.SIGUSR1, loopevent_trigger)
+
 client.run(TOKEN)

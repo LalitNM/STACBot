@@ -1,0 +1,2 @@
+0 0 1 * * root kill -s USR1 $(cat /usr/bot/.PID)    # Main task, trigger the bot to send a message (once a month)
+*/5 * * * * root date >> /var/log/cron.log          # Verify whether cron is up
