@@ -59,10 +59,10 @@ class memoryCache :
         self._data, self._seq = {}, []
 
 
-_IMG_CACHE = memoryCache(log_desc='image', maxsize=64,
+_IMG_CACHE = memoryCache(log_desc='image', maxsize=128,
     keyfunc=lambda offset : datetime.date.today()-datetime.timedelta(days=offset),
 )
-_WEB_CACHE = memoryCache(maxsize=24, log_desc='webpage')
+_WEB_CACHE = memoryCache(maxsize=36, log_desc='webpage')
 
 
 
@@ -208,7 +208,9 @@ async def fetch_and_parse(dt=None, with_photo=True):
                 "height": imgdata.get('h',''),
                 "width": imgdata.get('w','')
             }
-            embed["footer"]["text"] += "\nPicture of the Day from astrobin.com by "+imgdata.get('user','')
+            usertext = "\nPicture of the Day from astrobin.com by "+imgdata.get('user','')
+            if not usertext in embed["footer"]["text"] : # In cache, do not append again. List is mutable
+                embed["footer"]["text"] += usertext
         except :
             imgdata = {}
             logging.error("ERROR", exc_info=True)

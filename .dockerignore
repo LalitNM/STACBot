@@ -6,3 +6,4 @@
 venv
 .PID
 Procfile
+*.log
