@@ -4,10 +4,13 @@ import asyncio
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 from dotenv import load_dotenv
+import urllib.parse
 import datetime
 import functools
 import itertools
 import logging
+import random
+import copy
 import re
 import os
 import sys
@@ -18,6 +21,7 @@ load_dotenv()
 COLOURLIST = ['000075','4363d8','42d4f4','469990','3cb44b','bfef45',
               'ffe119','f58231','e6194B','f032e6','911eb4','dcbeff']
 CALENDAR_URL = "https://skymaps.com/articles/n{yy:02}{mm:02}.html"
+IMGSEARCH_URL = "https://www.astrobin.com/api/v1/image/?subjects={subj}&limit={lim}&api_key={key}&api_secret={secret}&format=json&offset={offset}"
 IOTD_URL1 = "https://www.astrobin.com/api/v1/imageoftheday/?limit=1&api_key={key}&api_secret={secret}&format=json&offset={offset}"
 IOTD_URL2 = "https://www.astrobin.com{path}/?api_key={key}&api_secret={secret}&format=json"
 
@@ -45,7 +49,7 @@ class memoryCache :
         if len(self._data) > self.maxsize :
             self._data.pop(self._seq.pop(0))
         logging.info(f'Cached {self.log_desc} for {dt}')
-        logging.debug(f"Cache state for {self.log_desc} - {self._data.keys()}")
+        logging.debug(f"Cache entry for {self.log_desc} - {dt} : {obj}")
         logging.debug(f"Cache state for {self.log_desc} - {self._seq}")
 
     def get(self, key):
@@ -58,11 +62,6 @@ class memoryCache :
     def clear(self):
         self._data, self._seq = {}, []
 
-
-_IMG_CACHE = memoryCache(log_desc='image', maxsize=128,
-    keyfunc=lambda offset : datetime.date.today()-datetime.timedelta(days=offset),
-)
-_WEB_CACHE = memoryCache(maxsize=36, log_desc='webpage')
 
 
 
@@ -81,11 +80,67 @@ def convertz(match,yy=None,mm=None,d=None,sub=True):
         return (t0.month, t0.day)
 
 
+
+_IMG_CACHE1 = memoryCache(log_desc='image', maxsize=100,
+    keyfunc=lambda offset : datetime.date.today()-datetime.timedelta(days=offset),
+)
+_IMG_CACHE2 = memoryCache(log_desc='image-search', maxsize=256,)
+_WEB_CACHE = memoryCache(log_desc='webpage', maxsize=36,)
+
+
+
+async def imagesearch(subject, limit=1):
+    global IMGSEARCH_URL, _IMG_CACHE2
+    assert type(subject)==str
+    assert type(limit)==int and limit>0
+
+    # Some consistency for subjects being searched by common catalog numbers/names
+    # To avoid storing multiple versions in cache (with only case/whitespace diff)
+    clean = re.sub(r'[^\w\s\(\)\-\u03b1-\u03c9]', '', subject,
+        flags=re.IGNORECASE|re.UNICODE).strip()
+    modified = re.sub(r'(M|NGC|IC|HD|HIP|SAO|TYC)(\s*)([0-9]+)', 
+        lambda m : ''.join([m.groups()[0].upper(), m.groups()[2]]),
+        clean, flags=re.IGNORECASE|re.UNICODE)
+    urlf = urllib.parse.quote(modified)
+    offset, partially_cached = 0, False
+
+    cached = _IMG_CACHE2.get(urlf)
+    if subject == '':
+        offset = random.randint(0,500)
+    elif cached is not None :
+        if len(cached)>=limit:
+            return (modified, cached[:limit])
+        else :
+            offset, partially_cached = len(cached), True
+            limit -= offset
+
+    try :
+        logging.info(f"Beginning ImageSearch API request - subject '{urlf}', lim {limit}, offs {offset}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(IMGSEARCH_URL.format(key=os.getenv('PHOTO_API_KEY'), 
+                                                    secret=os.getenv('PHOTO_API_SECRET'),
+                                                    subj=urlf, lim=limit, offset=offset)) as resp:
+                resp.raise_for_status()
+                imgs_info = (await resp.json())['objects']
+    except :
+        logging.error('ImageSearch request error', exc_info=True)
+        return (modified, [])
+    else :
+        logging.info('ImageSearch request success')
+        if partially_cached :
+            imgs_info = cached + imgs_info
+        _IMG_CACHE2.store(urlf, imgs_info)
+        return (modified, imgs_info)
+        # Even on success, imgs_info might be an empty list if subject doesnt exist
+        # Cache it anyway to prevent unnecessary requests for it again in future
+
+
+
 async def picoftheday(offset=0):
-    global IOTD_URL1, IOTD_URL2, _IMG_CACHE
+    global IOTD_URL1, IOTD_URL2, _IMG_CACHE1
     assert type(offset)==int and offset>=0
 
-    cached = _IMG_CACHE.get(offset)
+    cached = _IMG_CACHE1.get(offset)
     if cached is not None :
         return cached
 
@@ -110,7 +165,7 @@ async def picoftheday(offset=0):
         return {}
     else :
         logging.info('IOTD request success')
-        _IMG_CACHE.store(offset, iotd_imagedetails)
+        _IMG_CACHE1.store(offset, iotd_imagedetails)
         return iotd_imagedetails
 
 
@@ -133,7 +188,7 @@ async def fetch_and_parse(dt=None, with_photo=True):
                     web_location = str(response.url)
         except :
             logging.error('Skymaps request error', exc_info=True)
-            return ({},{'title':'!','description':'Oops, an error occurred','color':16711680})
+            return ({},{'title':':warning:','description':'Oops, an error occurred','color':16711680})
         else :
             logging.info(f"Received {CALENDAR_URL.format(yy=YEAR%100, mm=MONTH)}!")
 
@@ -159,6 +214,10 @@ async def fetch_and_parse(dt=None, with_photo=True):
                 for match in itertools.chain(re.finditer(r1, neat), re.finditer(r2, neat)):
                     mo, dat = convertz(match, YEAR, MONTH, DATE, False)
                     dates.append(dat); months.append(mo)
+                if not len(months) :
+                    months = [MONTH,]
+                if not len(dates) :
+                    dates = [DATE,]
                 if not any([m==MONTH for m in months]) : # Keep the event, but include month name with date
                     DATE = datetime.date(YEAR, months[0], dates[0]).strftime('%b %d')
                 elif not any([d==DATE for d in dates]) : # Shifted into neighbouring day
@@ -174,7 +233,7 @@ async def fetch_and_parse(dt=None, with_photo=True):
         except :
             logging.error('HTML parsing error', exc_info=True)
             logging.debug(bs)
-            return ({},{'title':'!','description':'Oops, an error occurred','color':16711680})
+            return ({},{'title':':warning:','description':'Oops, an error occurred','color':16711680})
         else :
             logging.info(f"Parsed {len(events)} event fields")
 
@@ -202,6 +261,9 @@ async def fetch_and_parse(dt=None, with_photo=True):
     # Add the picture to the message
     if with_photo :
         try :
+            # Use a copy, otherwise the image can end up in cache when unintended. 
+            # In other functions, there is no modification after caching
+            embed = copy.deepcopy(embed)
             imgdata = await picoftheday()
             embed["image"] = {
                 "url" : imgdata.get('url_regular',''),

@@ -15,12 +15,12 @@ import discord
 
 load_dotenv()
 filelog = logging.handlers.RotatingFileHandler('/var/log/bot/debug.log', 
-                                                maxBytes=1024*1024, backupCount=9)
+                                                maxBytes=5*1024*1024, backupCount=15)
 filelog.setLevel(logging.DEBUG)
 stdlog = logging.StreamHandler()
 stdlog.setLevel(logging.INFO)
 logging.basicConfig(format='%(module)-12s %(levelname)-8s [%(asctime)s] %(message)s', 
-                    datefmt='%m/%d/%Y %I:%M:%S %p',
+                    datefmt='%d/%m/%Y %I:%M:%S %p',
                     handlers=[filelog, stdlog],
                     level=logging.DEBUG)
 
@@ -74,6 +74,7 @@ async def react(emojiList, message):
 @client.event
 async def on_message(message):
     global prefix
+    receive_time = datetime.datetime.utcnow().replace(tzinfo=None)
     if message.author == client.user:
         return
     logging.info(f"Received message {message.id} in channel '{message.channel.name}'" +\
@@ -102,21 +103,46 @@ async def on_message(message):
         return
 
     try:
+        if len(content)>1 and content[1] == 'clearcaches':
+            astroevents._IMG_CACHE1.clear()
+            astroevents._IMG_CACHE2.clear()
+            astroevents._WEB_CACHE.clear()
+            logging.warning("Caches cleared")
+            await react(['🗑'], message)
+            return
+    except :
+        logging.error("Clear cache failed")
+
+    try:
         if len(content)>1 and message.content.split()[1] == 'help':
             logging.info("sending help message")
             await message.channel.send('''
             Following Commands are allowed:
             1. `@{STACBot} help`: replies with this help message.
-            2. `@{STACBot} react [n:int,1+]`: Reacts to <n>th message in history with '🤩', '🔥', '👍', '💯'. Default value of n is 1.
-            3. `@{STACBot} poll <n:int,1+>`: starts a poll by reacting to n last messages with '👍' and '👎'.
-            4. `@{STACBot} events [month:1..12] [year:2002+]`: Get a list of astronomical events happening this month, or in the past
-            5. `@{STACBot} (picture|photo) [k:int,0+]` : Display an astronomy-related photo of the day.
+            2. `@{STACBot} ping`: Measure the delay for the bot to receive your messages.
+            3. `@{STACBot} react [n:int,1+]`: Reacts to <n>th message in history with '🤩', '🔥', '👍', '💯'. Default value of n is 1.
+            4. `@{STACBot} poll <n:int,1+>`: starts a poll by reacting to n last messages with '👍' and '👎'.
+            5. `@{STACBot} events [month:1..12] [year:2002+]`: Get a list of astronomical events happening this month, or in the past
+            6. `@{STACBot} (image|photo) [k:int,0+]` : Display an astronomy-related photo of the day (for today, or *k* days ago); ***or***;
+                 `@{STACBot} (image|photo) search <subject> [ show <n:1..10> ]` Display upto n (default 1) images of an astronomical object. 
+                 Searching by catalog number (Eg. - `M31`, `NGC1952`) works best. Generic or well-known terms like `nebula`, `orion` also work.
             This bot automatically reacts with '🤩', '🔥', '👍', '💯' to attached images and if there is a link in a message.
             It also posts the upcoming events on the first day of each month in the dedicated channel.
             '''.format(STACBot=message.guild.me.display_name))
             return
     except:
         logging.error('This was not help command.', exc_info=True)
+
+    try :
+        if len(content)>1 and content[1]=='ping':
+            logging.info(f"Ping command {message.created_at} {receive_time}")
+            diff = receive_time - message.created_at.replace(tzinfo=None)
+            await message.channel.send(f"{diff.total_seconds()} sec", reference=message)
+            return
+    except :
+        logging.error("Ping command failed", exc_info=True)
+
+    # ------- React command --------
     try:
         if 'react' in content:
             if len(content) == 2:
@@ -135,6 +161,7 @@ async def on_message(message):
     except:
         logging.error("\'react\' is not in message.", exc_info=True)
 
+    # ------- Poll command --------
     try:
         if len(content)>1 and content[1] == 'poll':
             if not (len(content)>=3 and content[-1].isdigit()):
@@ -150,6 +177,7 @@ async def on_message(message):
     except:
         logging.error("This was not a poll command.", exc_info=True)
 
+    # ------- Events command --------
     try :
         if len(content)>1 and content[1] == 'events':
             logging.info("Executing events command")
@@ -174,8 +202,54 @@ async def on_message(message):
     except:
         logging.error("Events command failed", exc_info=True)
     
+    # ------- Image commands --------
     try :
-        if len(content)>1 and (content[1]=='picture' or content[1]=='photo') :
+        if len(content)>1 and (content[1]=='image' or content[1]=='photo') :
+
+            # Subcommand 1 - search for an object
+            if len(content)>2 and content[2]=='search':
+                logging.info("Executing image search command")
+                if not len(content)>3 :
+                    await message.channel.send("Specify an object to search for, e.g. - *M31*", reference=message)
+                    return
+                if 'show' in content :
+                    lp = content.index('show')
+                    if not (len(content)>lp+1 and content[lp+1].isdigit()):
+                        await message.channel.send("Invalid number. Must be in the range 1..10", reference=message)
+                        return
+                    lim = int(content[lp+1])
+                    if not 1 <= lim <= 10 :
+                        await message.channel.send("Invalid number. Must be in the range 1..10", reference=message)
+                        return
+                else : 
+                    lim, lp = 1, None
+                searchstr = ' '.join(content[3:lp])
+                query, imgdata = await astroevents.imagesearch(searchstr, lim)
+                l = len(imgdata)
+                logging.info(f"Received {l} results for imagesearch query")
+                if not l :
+                    embed = discord.Embed.from_dict({
+                        'title':':mag::x:', 
+                        'description':f"No results found for `{query}`"
+                    })
+                    await message.channel.send(embed = embed)
+                else :
+                    for i, obj in enumerate(imgdata, start=1) :
+                        url = obj.get('url_hd') or obj.get('url_regular', '')
+                        hashid = obj.get('hash') or os.path.basename(str(obj.get('resource_uri','')).rstrip('/'))
+                        embed = discord.Embed.from_dict({
+                            'title':obj.get('title','Unknown'),
+                            'description':f"Result {i}/{l}",
+                            'url':url,
+                            'image': {'url':url, 'height':obj.get('h'), 'width':obj.get('w')},
+                            'footer': {'text':"astrobin.com/{hash}, taken by {author}".format(
+                                hash=hashid, author=obj.get('user')
+                            )}
+                        })
+                        await message.channel.send(embed=embed)
+                return
+                
+            # Subcommand 2 - image of the day
             logging.info("Executing image of the day command")
             if len(content)>2 and content[2].isdigit() and int(content[2])>=0:
                 offset = int(content[2])
@@ -184,13 +258,14 @@ async def on_message(message):
                 offset, offstr = 0, ""
             imgdata = await astroevents.picoftheday(offset)
             url = imgdata.get('url_hd') or imgdata.get('url_regular', '')
+            hashid = imgdata.get('hash') or os.path.basename(str(imgdata.get('resource_uri','')).rstrip('/'))
             embed = discord.Embed.from_dict({
                 'title':imgdata.get('title','Unknown'),
                 'description':"Image of the Day" + offstr,
                 'url':url,
                 'image': {'url':url, 'height':imgdata.get('h'), 'width':imgdata.get('w')},
                 'footer': {'text':"astrobin.com/{hash}, taken by {author}".format(
-                    hash=imgdata.get('hash'), author=imgdata.get('user')
+                    hash=hashid, author=imgdata.get('user')
                 )}
             })
             await message.channel.send(embed=embed)
@@ -214,8 +289,6 @@ async def loop_monthly():
     if not client.is_closed():
         try :
             imgdata, embdata = await astroevents.fetch_and_parse()
-            logging.debug(imgdata)
-            logging.debug(embdata)
             embed = discord.Embed.from_dict(embdata)
             logging.info(f"Embed length {len(embed)}")
             await channel.send(embed=embed)
